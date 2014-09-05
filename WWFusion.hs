@@ -18,7 +18,7 @@ module WWFusion
 
 import Prelude hiding ((++), foldl, foldr, concat, filter, map, reverse, dropWhile, scanl)
 
-data Wrap f b = Wrap (forall e. f e -> e -> b -> b) (forall e. (e -> b -> b) -> f e)
+data Wrap f b = Wrap (forall e. f e -> e -> b) (forall e. (e -> b) -> f e)
 
 foldrW
   :: Wrap f b
@@ -26,14 +26,14 @@ foldrW
   -> b
   -> [a]
   -> b
-foldrW (Wrap wrap unwrap) f z0 list0 = wrap go list0 z0
+foldrW (Wrap wrap unwrap) f z0 list0 = wrap go list0
   where
-    go = unwrap $ \list z' -> case list of
-      [] -> z'
-      x:xs -> f x $ wrap go xs z'
+    go = unwrap $ \list -> case list of
+      [] -> z0
+      x:xs -> f x $ wrap go xs
 {-# NOINLINE[0] foldrW #-}
 
-newtype Simple b e = Simple { runSimple :: e -> b -> b }
+newtype Simple b e = Simple { runSimple :: e -> b }
 
 isoSimple :: Wrap (Simple b) b
 isoSimple = Wrap runSimple Simple
@@ -70,22 +70,19 @@ concat xs = buildW (\i c n -> foldrW i (\x y -> foldrW i c y x) n xs)
 {-# INLINE concat #-}
 
 foldl' :: (b -> a -> b) -> b -> [a] -> b
-foldl' f initial = \xs -> foldrW (Wrap wrap unwrap) g id xs initial
-  where
-    wrap (Simple s) e k a = k $ s e a
-    unwrap u = Simple $ \e a -> u e id a
-    g x next acc = next $! f acc x
+foldl' f initial = \xs -> foldrW wrapFoldl g id xs initial
+  where g x next acc = next $! f acc x
 {-# INLINE foldl' #-}
 
 foldl :: (b -> a -> b) -> b -> [a] -> b
 foldl f initial = \xs -> foldrW wrapFoldl g id xs initial
-  where
-    g x next acc = next $ f acc x
+  where g x next acc = next $ f acc x
 {-# INLINE foldl #-}
 
-wrapFoldl :: Wrap (Simple b) (b -> b)
-wrapFoldl = Wrap (\(Simple s) e k a -> k $ s e a)
-                 (\u -> Simple $ \e a -> u e id a)
+newtype Left b e = L { runL :: e -> b -> b }
+
+wrapFoldl :: Wrap (Left b) (b -> b)
+wrapFoldl = Wrap runL L
 
 map :: (a -> b) -> [a] -> [b]
 map f = \xs -> buildW (mapFB f xs)
@@ -116,11 +113,11 @@ eftFB
   -> (Int -> r -> r)
   -> r
   -> r
-eftFB from to (Wrap wrap unwrap) cons nil = wrap go from nil
+eftFB from to (Wrap wrap unwrap) cons nil = wrap go from
   where
-    go = unwrap $ \i rest -> if i <= to
-      then cons i $ wrap go (i + 1) rest
-      else rest
+    go = unwrap $ \i -> if i <= to
+      then cons i $ wrap go (i + 1)
+      else nil
 {-# INLINE[0] eftFB #-}
 
 filterFB
@@ -147,8 +144,8 @@ newtype Env r f e = Env { runEnv :: r -> f e }
 
 dwWrap :: Wrap f r -> Wrap (Env s f) (s -> r)
 dwWrap (Wrap wrap unwrap) = Wrap
-  (\(Env h) e k s -> wrap (h s) e (k s))
-  (\h -> Env $ \s -> unwrap $ \e r -> h e (\_ -> r) s)
+  (\(Env h) e s -> wrap (h s) e)
+  (\h -> Env $ \s -> unwrap $ \e -> h e s)
 {-# INLINE[0] dwWrap #-}
 
 dwNil :: r -> Bool -> r
@@ -167,10 +164,10 @@ revFB :: [a] -> Wrap f r -> (a -> r -> r) -> r -> r
 revFB xs = \w cons nil -> foldrW (revWrap w) (revCons cons) id xs nil
 {-# INLINE revFB #-}
 
-revWrap :: Wrap f r -> Wrap f (r -> r)
+revWrap :: Wrap f r -> Wrap (Env r f) (r -> r)
 revWrap (Wrap wrap unwrap) = Wrap
-  (\h e k s -> k $ wrap h e s)
-  (\h -> unwrap $ \e r -> h e id r)
+  (\(Env h) e r -> wrap (h r) e)
+  (\h -> Env $ \r -> unwrap $ \e -> h e r)
 {-# INLINE[0] revWrap #-}
 
 revCons :: (a -> r -> r) -> a -> (r -> r) -> r -> r
@@ -187,8 +184,8 @@ scanlFB f z xs = \w c n -> foldrW (scanlWrap c w) (scanlCons f) (const n) xs z
 
 scanlWrap :: (b -> r -> r) -> Wrap f r -> Wrap (Env b f) (b -> r)
 scanlWrap cons (Wrap wrap unwrap) = Wrap
-  (\(Env s) e k b -> wrap (s b) e (k b))
-  (\u -> Env $ \b -> unwrap $ \e r -> b `cons` u e (\b' -> r) b)
+  (\(Env s) e b -> wrap (s b) e)
+  (\u -> Env $ \b -> unwrap $ \e -> b `cons` u e b)
 {-# INLINE[0] scanlWrap #-}
 
 scanlCons :: (b -> a -> b) -> a -> (b -> r) -> b -> r
