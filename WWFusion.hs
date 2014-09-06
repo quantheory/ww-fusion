@@ -237,6 +237,16 @@ scanlCons f = \e k acc -> k (f acc e)
       -> c)
     .
   foldrW i f z (buildW g) = g i f z
+"foldrW/buildWStatic" forall
+    f z
+    (i :: Wrap f b)
+    (g :: forall c g .
+      (Wrap g c)
+      -> (a -> c -> c)
+      -> c
+      -> c)
+    .
+  foldrW i f z (buildWStatic g) = g i f z
 "foldrW/augmentW" forall
     f z
     (i :: forall e. Wrap (f e) (e -> b -> b))
@@ -248,6 +258,17 @@ scanlCons f = \e k acc -> k (f acc e)
     xs
     .
   foldrW i f z (augmentW g xs) = g i f (foldrW i f z xs)
+"foldrW/augmentWStatic" forall
+    f z
+    (i :: forall e. Wrap (f e) (e -> b -> b))
+    (g :: forall c g .
+      (Wrap g c)
+      -> (a -> c -> c)
+      -> c
+      -> c)
+    xs
+    .
+  foldrW i f z (augmentWStatic g xs) = g i f (foldrW i f z xs)
 "augmentW/buildW" forall
     (f :: forall c g.
       (Wrap g c)
@@ -261,4 +282,43 @@ scanlCons f = \e k acc -> k (f acc e)
       -> c)
     .
   augmentW g (buildW f) = buildW (\i c n -> g i c (f i c n))
+"augmentWStatic/buildW" forall
+    (f :: forall c g.
+      (Wrap g c)
+      -> (a -> c -> c)
+      -> c
+      -> c)
+    (g :: forall c g .
+      (Wrap g c)
+      -> (a -> c -> c)
+      -> c
+      -> c)
+    .
+  augmentWStatic g (buildW f) = buildW (\i c n -> g i c (f i c n))
+"augmentW/buildWStatic" forall
+    (f :: forall c g.
+      (Wrap g c)
+      -> (a -> c -> c)
+      -> c
+      -> c)
+    (g :: forall c g .
+      (Wrap g c)
+      -> (a -> c -> c)
+      -> c
+      -> c)
+    .
+  augmentW g (buildWStatic f) = buildW (\i c n -> g i c (f i c n))
+"augmentWStatic/buildWStatic" forall
+    (f :: forall c g.
+      (Wrap g c)
+      -> (a -> c -> c)
+      -> c
+      -> c)
+    (g :: forall c g .
+      (Wrap g c)
+      -> (a -> c -> c)
+      -> c
+      -> c)
+    .
+  augmentWStatic g (buildWStatic f) = buildWStatic (\i c n -> g i c (f i c n))
   #-}
