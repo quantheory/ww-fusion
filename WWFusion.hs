@@ -38,8 +38,19 @@ newtype Simple b e = Simple { runSimple :: e -> b -> b }
 isoSimple :: Wrap (Simple b) b
 isoSimple = Wrap runSimple Simple
 
+static :: b -> Wrap (Simple b) (b -> b -> b)
+static z0 = Wrap
+ (\(Simple f) e k z b -> k (f e b) z)
+ (\u -> Simple $ \e i -> u e const z0 i)
+
+staticCons :: (a -> r -> r) -> a -> (r -> r -> r) -> (r -> r -> r)
+staticCons c = \x k l r -> c x (k l r)
+{-# INLINE staticCons #-}
+
+-- foldr :: (a -> b -> b) -> b -> [a] -> b
+-- foldr f z = foldrW isoSimple f z
 foldr :: (a -> b -> b) -> b -> [a] -> b
-foldr f z = foldrW isoSimple f z
+foldr f z = \xs -> foldrW (static z) (staticCons f) const xs z z
 {-# INLINE foldr #-}
 
 buildW
@@ -51,6 +62,15 @@ buildW
 buildW g = g isoSimple (:) []
 {-# INLINE[0] buildW #-}
 
+buildWStatic
+  :: (forall b f . (Wrap f b)
+    -> (a -> b -> b)
+    -> b
+    -> b)
+  -> [a]
+buildWStatic g = g (static []) (staticCons (:)) const [] []
+{-# INLINE[0] buildWStatic #-}
+
 augmentW
   :: (forall b f . (Wrap f b)
     -> (a -> b -> b)
@@ -61,12 +81,22 @@ augmentW
 augmentW g xs = g isoSimple (:) xs
 {-# INLINE[0] augmentW #-}
 
+augmentWStatic
+  :: (forall b f . (Wrap f b)
+    -> (a -> b -> b)
+    -> b
+    -> b)
+  -> [a]
+  -> [a]
+augmentWStatic g xs = g (static xs) (staticCons (:)) const xs xs
+{-# INLINE[0] augmentWStatic #-}
+
 (++) :: [a] -> [a] -> [a]
 a ++ b = augmentW (\i c n -> foldrW i c n a) b
 {-# INLINE (++) #-}
 
 concat :: [[a]] -> [a]
-concat xs = buildW (\i c n -> foldrW i (\x y -> foldrW i c y x) n xs)
+concat xs = buildWStatic (\i c n -> foldrW i (\x y -> foldrW i c y x) n xs)
 {-# INLINE concat #-}
 
 foldl' :: (b -> a -> b) -> b -> [a] -> b
@@ -88,7 +118,7 @@ wrapFoldl = Wrap (\(Simple s) e k a -> k $ s e a)
                  (\u -> Simple $ \e a -> u e id a)
 
 map :: (a -> b) -> [a] -> [b]
-map f = \xs -> buildW (mapFB f xs)
+map f = \xs -> buildWStatic (mapFB f xs)
 {-# INLINE map #-}
 
 mapFB
@@ -102,11 +132,11 @@ mapFB f xs = \ww cons nil -> foldrW ww (cons . f) nil xs
 {-# INLINE mapFB #-}
 
 filter :: (a -> Bool) -> [a] -> [a]
-filter p = \xs -> buildW (filterFB p xs)
+filter p = \xs -> buildWStatic (filterFB p xs)
 {-# INLINE filter #-}
 
 eft :: Int -> Int -> [Int]
-eft = \from to -> buildW (eftFB from to)
+eft = \from to -> buildWStatic (eftFB from to)
 {-# INLINE eft #-}
 
 eftFB
