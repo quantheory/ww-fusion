@@ -213,17 +213,17 @@ scanl f z xs = buildW (scanlFB f z xs)
 {-# INLINE scanl #-}
 
 scanlFB :: (b -> a -> b) -> b -> [a] -> Wrap f r -> (b -> r -> r) -> r -> r
-scanlFB f z xs = \w c n -> foldrW (scanlWrap c w) (scanlCons f) (const n) xs z
+scanlFB f z xs = \w c n -> z `c` foldrW (scanlWrap w) (scanlCons c f) (const n) xs z
 {-# INLINE scanlFB #-}
 
-scanlWrap :: (b -> r -> r) -> Wrap f r -> Wrap (Env b f) (b -> r)
-scanlWrap cons (Wrap wrap unwrap) = Wrap
+scanlWrap :: Wrap f r -> Wrap (Env b f) (b -> r)
+scanlWrap (Wrap wrap unwrap) = Wrap
   (\(Env s) e k b -> wrap (s b) e (k b))
-  (\u -> Env $ \b -> unwrap $ \e r -> b `cons` u e (\b' -> r) b)
+  (\u -> Env $ \b -> unwrap $ \e r -> u e (\b' -> r) b)
 {-# INLINE[0] scanlWrap #-}
 
-scanlCons :: (b -> a -> b) -> a -> (b -> r) -> b -> r
-scanlCons f = \e k acc -> k (f acc e)
+scanlCons :: (b -> r -> r) -> (b -> a -> b) -> a -> (b -> r) -> b -> r
+scanlCons c f = \e k acc -> let acc' = f acc e in c acc' $ k acc'
 {-# INLINE[0] scanlCons #-}
 
 {-# RULES
