@@ -174,11 +174,12 @@ dwFB p xs = \w cons nil -> foldrW (dwWrap w) (dwCons p cons) (dwNil nil) xs True
 {-# INLINE dwFB #-}
 
 newtype Env r f e = Env { runEnv :: r -> f e }
+newtype Arg s f e = Arg { runArg :: f (e, s) }
 
-dwWrap :: Wrap f r -> Wrap (Env s f) (s -> r)
+dwWrap :: Wrap f r -> Wrap (Arg s f) (s -> r)
 dwWrap (Wrap wrap unwrap) = Wrap
-  (\(Env h) e k s -> wrap (h s) e (k s))
-  (\h -> Env $ \s -> unwrap $ \e r -> h e (\_ -> r) s)
+  (\(Arg h) e k s -> wrap h (e,s) (k s))
+  (\h -> Arg . unwrap $ \(e,s) r -> h e (\_ -> r) s)
 {-# INLINE[0] dwWrap #-}
 
 dwNil :: r -> Bool -> r
