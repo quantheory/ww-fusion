@@ -1,23 +1,23 @@
 {-# LANGUAGE RankNTypes, ScopedTypeVariables #-}
 module WWFusion
-  ( foldrW
+  ( (++)
   , buildW
+  , concat
+  , dropWhile
+  , eft
+  , filter
   , foldl
   , foldl'
   , foldr
-  , filter
+  , foldrW
+  , foldM
   , map
-  , eft
-  , (++)
-  , concat
-  , dropWhile
   , reverse
   , scanl
   , Wrap(..)
   ) where
 
-import Prelude hiding ((++), foldl, foldr, concat, filter, map, reverse, dropWhile, scanl)
-
+import Prelude hiding ((++), concat, dropWhile, filter, foldl, foldr, map, reverse, scanl)
 data Wrap f b = Wrap (forall e. f e -> e -> b -> b) (forall e. (e -> b -> b) -> f e)
 
 foldrW
@@ -118,22 +118,30 @@ wrapFoldl = Wrap (\(Simple s) e k a -> k $ s e a)
                  (\u -> Simple $ \e a -> u e id a)
 
 map :: (a -> b) -> [a] -> [b]
-map f = \xs -> buildWStatic (mapFB f xs)
+map f = \ xs -> buildWStatic (\ww c n -> foldrW ww (mapFB c f) n xs)
 {-# INLINE map #-}
 
-mapFB
-  :: (a -> b)
-  -> [a]
-  -> Wrap f r
-  -> (b -> r -> r)
-  -> r
-  -> r
-mapFB f xs = \ww cons nil -> foldrW ww (cons . f) nil xs
-{-# INLINE mapFB #-}
+mapFB ::  (elt -> lst -> lst) -> (a -> elt) -> a -> lst -> lst
+mapFB c f = \x ys -> c (f x) ys
+{-# INLINE [0] mapFB #-}
+
+{-# RULES
+"mapFB"     forall c f g.       mapFB (mapFB c f) g     = mapFB c (f.g)
+ #-}
 
 filter :: (a -> Bool) -> [a] -> [a]
-filter p = \xs -> buildWStatic (filterFB p xs)
+filter p = \xs -> buildWStatic (\ww c n -> foldrW ww (filterFB c p) n xs) 
 {-# INLINE filter #-}
+
+filterFB :: (a -> b -> b) -> (a -> Bool) -> a -> b -> b
+filterFB c p x r | p x       = x `c` r
+                 | otherwise = r
+
+{-# INLINE[0] filterFB #-}
+
+{-# RULES
+"filterFB"        forall c p q. filterFB (filterFB c p) q = filterFB c (\x -> q x && p x)
+ #-}
 
 eft :: Int -> Int -> [Int]
 eft = \from to -> buildWStatic (eftFB from to)
@@ -153,18 +161,6 @@ eftFB from to (Wrap wrap unwrap) cons nil = wrap go from nil
       else rest
 {-# INLINE[0] eftFB #-}
 
-filterFB
-  :: (a -> Bool)
-  -> [a]
-  -> (Wrap f r)
-  -> (a -> r -> r)
-  -> r
-  -> r
-filterFB p xs ww cons nil = foldrW ww f nil xs
-  where
-    f x y = if p x then cons x y else y
-{-# INLINE[0] filterFB #-}
-
 dropWhile :: (a -> Bool) -> [a] -> [a]
 dropWhile p xs = buildW $ dwFB p xs
 {-# INLINE dropWhile #-}
@@ -173,7 +169,6 @@ dwFB :: (a -> Bool) -> [a] -> Wrap f r -> (a -> r -> r) -> r -> r
 dwFB p xs = \w cons nil -> foldrW (dwWrap w) (dwCons p cons) (dwNil nil) xs True
 {-# INLINE dwFB #-}
 
-newtype Env r f e = Env { runEnv :: r -> f e }
 newtype Arg s f e = Arg { runArg :: f (e, s) }
 
 dwWrap :: Wrap f r -> Wrap (Arg s f) (s -> r)
@@ -191,12 +186,11 @@ dwCons p c = \e k b -> let b' = b && p e in if b' then k b' else e `c` k b'
 {-# INLINE[0] dwCons #-}
 
 reverse :: [a] -> [a]
-reverse xs = buildW $ revFB xs
+reverse xs = buildW $ \w cons nil -> foldrW (revWrap w) (revFB cons) id xs nil
 {-# INLINE reverse #-}
 
-revFB :: [a] -> Wrap f r -> (a -> r -> r) -> r -> r
-revFB xs = \w cons nil -> foldrW (revWrap w) (revCons cons) id xs nil
-{-# INLINE revFB #-}
+revFB c = \v fn z -> fn (c v z)
+{-# INLINE[0] revFB #-}
 
 revWrap :: Wrap f r -> Wrap f (r -> r)
 revWrap (Wrap wrap unwrap) = Wrap
@@ -222,9 +216,34 @@ scanlWrap (Wrap wrap unwrap) = Wrap
   (\u -> Env $ \b -> unwrap $ \e r -> u e (\b' -> r) b)
 {-# INLINE[0] scanlWrap #-}
 
+newtype Env r f e = Env { runEnv :: r -> f e }
+
 scanlCons :: (b -> r -> r) -> (b -> a -> b) -> a -> (b -> r) -> b -> r
 scanlCons c f = \e k acc -> let acc' = f acc e in c acc' $ k acc'
 {-# INLINE[0] scanlCons #-}
+
+foldM             :: forall m elT accT . (Monad m) => (accT -> elT -> m accT) -> accT -> [elT] -> m accT
+foldM f initial = \xs -> foldrW wrapFoldM g return xs initial
+  where
+    g x next acc = f acc x >>= \val -> next val
+    wrapFoldM :: Wrap (SimpleM m accT) (accT -> m accT)
+    wrapFoldM = Wrap (\(SimpleM s) e k a -> s e a `bindFoldM` k)
+                     (\u -> SimpleM $ \e a -> u e returnFoldM a)
+{-# INLINE foldM #-}
+
+newtype SimpleM m b e = SimpleM { runSimpleM :: e -> b -> m b }
+
+bindFoldM :: Monad m => m a -> (a -> m b) -> m b
+bindFoldM = (>>=)
+{-# INLINE [0] bindFoldM #-}
+
+returnFoldM :: Monad m => a -> m a
+returnFoldM = return
+{-# INLINE [0] returnFoldM #-}
+
+{-# RULES
+"MonadRightId" forall m . bindFoldM m return = m
+ #-}
 
 {-# RULES
 "foldrW/buildW" forall
