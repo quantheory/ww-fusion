@@ -38,19 +38,8 @@ newtype Simple b e = Simple { runSimple :: e -> b -> b }
 isoSimple :: Wrap (Simple b) b
 isoSimple = Wrap runSimple Simple
 
-static :: b -> Wrap (Simple b) (b -> b -> b)
-static z0 = Wrap
- (\(Simple f) e k z b -> k (f e b) z)
- (\u -> Simple $ \e i -> u e const z0 i)
-
-staticCons :: (a -> r -> r) -> a -> (r -> r -> r) -> (r -> r -> r)
-staticCons c = \x k l r -> c x (k l r)
-{-# INLINE staticCons #-}
-
--- foldr :: (a -> b -> b) -> b -> [a] -> b
--- foldr f z = foldrW isoSimple f z
 foldr :: (a -> b -> b) -> b -> [a] -> b
-foldr f z = \xs -> foldrW (static z) (staticCons f) const xs z z
+foldr f z = \xs -> foldrW isoSimple f z xs
 {-# INLINE foldr #-}
 
 buildW
@@ -62,15 +51,6 @@ buildW
 buildW g = g isoSimple (:) []
 {-# INLINE[0] buildW #-}
 
-buildWStatic
-  :: (forall b f . (Wrap f b)
-    -> (a -> b -> b)
-    -> b
-    -> b)
-  -> [a]
-buildWStatic g = g (static []) (staticCons (:)) const [] []
-{-# INLINE[0] buildWStatic #-}
-
 augmentW
   :: (forall b f . (Wrap f b)
     -> (a -> b -> b)
@@ -81,22 +61,12 @@ augmentW
 augmentW g xs = g isoSimple (:) xs
 {-# INLINE[0] augmentW #-}
 
-augmentWStatic
-  :: (forall b f . (Wrap f b)
-    -> (a -> b -> b)
-    -> b
-    -> b)
-  -> [a]
-  -> [a]
-augmentWStatic g xs = g (static xs) (staticCons (:)) const xs xs
-{-# INLINE[0] augmentWStatic #-}
-
 (++) :: [a] -> [a] -> [a]
 a ++ b = augmentW (\i c n -> foldrW i c n a) b
 {-# INLINE (++) #-}
 
 concat :: [[a]] -> [a]
-concat xs = buildWStatic (\i c n -> foldrW i (\x y -> foldrW i c y x) n xs)
+concat xs = buildW (\i c n -> foldrW i (\x y -> foldrW i c y x) n xs)
 {-# INLINE concat #-}
 
 foldl' :: (b -> a -> b) -> b -> [a] -> b
@@ -118,7 +88,7 @@ wrapFoldl = Wrap (\(Simple s) e k a -> k $ s e a)
                  (\u -> Simple $ \e a -> u e id a)
 
 map :: (a -> b) -> [a] -> [b]
-map f = \ xs -> buildWStatic (\ww c n -> foldrW ww (mapFB c f) n xs)
+map f = \ xs -> buildW (\ww c n -> foldrW ww (mapFB c f) n xs)
 {-# INLINE map #-}
 
 mapFB ::  (elt -> lst -> lst) -> (a -> elt) -> a -> lst -> lst
@@ -130,7 +100,7 @@ mapFB c f = \x ys -> c (f x) ys
  #-}
 
 filter :: (a -> Bool) -> [a] -> [a]
-filter p = \xs -> buildWStatic (\ww c n -> foldrW ww (filterFB c p) n xs) 
+filter p = \xs -> buildW(\ww c n -> foldrW ww (filterFB c p) n xs) 
 {-# INLINE filter #-}
 
 filterFB :: (a -> b -> b) -> (a -> Bool) -> a -> b -> b
@@ -144,7 +114,7 @@ filterFB c p x r | p x       = x `c` r
  #-}
 
 eft :: Int -> Int -> [Int]
-eft = \from to -> buildWStatic (eftFB from to)
+eft = \from to -> buildW(eftFB from to)
 {-# INLINE eft #-}
 
 eftFB
@@ -198,10 +168,6 @@ revWrap (Wrap wrap unwrap) = Wrap
   (\h -> unwrap $ \e r -> h e id r)
 {-# INLINE[0] revWrap #-}
 
-revCons :: (a -> r -> r) -> a -> (r -> r) -> r -> r
-revCons c e k z = k (c e z)
-{-# INLINE[0] revCons #-}
-
 scanl :: (b -> a -> b) -> b -> [a] -> [b]
 scanl f z xs = buildW (scanlFB f z xs)
 {-# INLINE scanl #-}
@@ -219,7 +185,7 @@ scanlWrap (Wrap wrap unwrap) = Wrap
 newtype Env r f e = Env { runEnv :: r -> f e }
 
 scanlCons :: (b -> r -> r) -> (b -> a -> b) -> a -> (b -> r) -> b -> r
-scanlCons c f = \e k acc -> let acc' = f acc e in c acc' $ k acc'
+scanlCons c f = \e k acc -> let acc' = f acc e in acc' `c` k acc'
 {-# INLINE[0] scanlCons #-}
 
 foldM             :: forall m elT accT . (Monad m) => (accT -> elT -> m accT) -> accT -> [elT] -> m accT
@@ -227,22 +193,15 @@ foldM f initial = \xs -> foldrW wrapFoldM g return xs initial
   where
     g x next acc = f acc x >>= \val -> next val
     wrapFoldM :: Wrap (SimpleM m accT) (accT -> m accT)
-    wrapFoldM = Wrap (\(SimpleM s) e k a -> s e a `bindFoldM` k)
-                     (\u -> SimpleM $ \e a -> u e returnFoldM a)
+    wrapFoldM = Wrap (\(SimpleM s) e k a -> s e a >>= k)
+                     (\u -> SimpleM $ \e a -> u e return a)
 {-# INLINE foldM #-}
 
 newtype SimpleM m b e = SimpleM { runSimpleM :: e -> b -> m b }
 
-bindFoldM :: Monad m => m a -> (a -> m b) -> m b
-bindFoldM = (>>=)
-{-# INLINE [0] bindFoldM #-}
-
-returnFoldM :: Monad m => a -> m a
-returnFoldM = return
-{-# INLINE [0] returnFoldM #-}
-
 {-# RULES
-"MonadRightId" forall m . bindFoldM m return = m
+"MonadRightId" forall m . (>>=) m return = m
+"MonadLeftId"  forall x f . (>>=) (return x) f = f x
  #-}
 
 {-# RULES
@@ -256,16 +215,6 @@ returnFoldM = return
       -> c)
     .
   foldrW i f z (buildW g) = g i f z
-"foldrW/buildWStatic" forall
-    f z
-    (i :: Wrap f b)
-    (g :: forall c g .
-      (Wrap g c)
-      -> (a -> c -> c)
-      -> c
-      -> c)
-    .
-  foldrW i f z (buildWStatic g) = g i f z
 "foldrW/augmentW" forall
     f z
     (i :: forall e. Wrap (f e) (e -> b -> b))
@@ -277,17 +226,6 @@ returnFoldM = return
     xs
     .
   foldrW i f z (augmentW g xs) = g i f (foldrW i f z xs)
-"foldrW/augmentWStatic" forall
-    f z
-    (i :: forall e. Wrap (f e) (e -> b -> b))
-    (g :: forall c g .
-      (Wrap g c)
-      -> (a -> c -> c)
-      -> c
-      -> c)
-    xs
-    .
-  foldrW i f z (augmentWStatic g xs) = g i f (foldrW i f z xs)
 "augmentW/buildW" forall
     (f :: forall c g.
       (Wrap g c)
@@ -301,43 +239,4 @@ returnFoldM = return
       -> c)
     .
   augmentW g (buildW f) = buildW (\i c n -> g i c (f i c n))
-"augmentWStatic/buildW" forall
-    (f :: forall c g.
-      (Wrap g c)
-      -> (a -> c -> c)
-      -> c
-      -> c)
-    (g :: forall c g .
-      (Wrap g c)
-      -> (a -> c -> c)
-      -> c
-      -> c)
-    .
-  augmentWStatic g (buildW f) = buildW (\i c n -> g i c (f i c n))
-"augmentW/buildWStatic" forall
-    (f :: forall c g.
-      (Wrap g c)
-      -> (a -> c -> c)
-      -> c
-      -> c)
-    (g :: forall c g .
-      (Wrap g c)
-      -> (a -> c -> c)
-      -> c
-      -> c)
-    .
-  augmentW g (buildWStatic f) = buildW (\i c n -> g i c (f i c n))
-"augmentWStatic/buildWStatic" forall
-    (f :: forall c g.
-      (Wrap g c)
-      -> (a -> c -> c)
-      -> c
-      -> c)
-    (g :: forall c g .
-      (Wrap g c)
-      -> (a -> c -> c)
-      -> c
-      -> c)
-    .
-  augmentWStatic g (buildWStatic f) = buildWStatic (\i c n -> g i c (f i c n))
   #-}
